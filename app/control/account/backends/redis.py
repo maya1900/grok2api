@@ -8,8 +8,6 @@ Layout:
 """
 
 import json
-from typing import Any
-
 from app.platform.runtime.clock import now_ms
 from ..commands import AccountPatch, AccountUpsert, BulkReplacePoolCommand, ListAccountsQuery
 from ..enums import AccountStatus
@@ -253,8 +251,6 @@ class RedisAccountRepository:
             if not h:
                 continue
             record = self._from_hash(patch.token, h)
-            qs = record.quota_set()
-
             updates: dict[str, str] = {
                 "updated_at": str(ts),
                 "revision":   str(rev),
@@ -315,7 +311,9 @@ class RedisAccountRepository:
             if patch.clear_failures:
                 for k in ("cooldown_until", "cooldown_reason", "disabled_at",
                           "disabled_reason", "expired_at", "expired_reason",
-                          "forbidden_strikes", "console_429_count"):
+                          "forbidden_strikes", "console_429_count",
+                          "invalid_recheck_count", "invalid_recheck_last_at",
+                          "invalid_recheck_confirmed_at"):
                     ext.pop(k, None)
                 updates["status"]           = AccountStatus.ACTIVE.value
                 updates["usage_fail_count"] = "0"

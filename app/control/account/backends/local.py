@@ -210,6 +210,8 @@ class LocalAccountRepository:
             "fail_count": cls._payload_int(row["usage_fail_count"]),
             "last_used_at": row["last_use_at"],
             "tags": cls._parse_tags(row["tags"]),
+            "invalid_recheck_count": cls._payload_int(row["invalid_recheck_count"]),
+            "invalid_confirmed": bool(row["invalid_confirmed"]),
         }
 
     def _upsert_sync(
@@ -305,8 +307,6 @@ class LocalAccountRepository:
             if row is None:
                 continue
             record = self._row_to_record(row)
-            qs = record.quota_set()
-
             sets: dict[str, Any] = {"updated_at": ts, "revision": revision}
 
             if patch.pool is not None:
@@ -365,7 +365,9 @@ class LocalAccountRepository:
             if patch.clear_failures:
                 for k in ("cooldown_until", "cooldown_reason", "disabled_at",
                           "disabled_reason", "expired_at", "expired_reason",
-                          "forbidden_strikes", "console_429_count"):
+                          "forbidden_strikes", "console_429_count",
+                          "invalid_recheck_count", "invalid_recheck_last_at",
+                          "invalid_recheck_confirmed_at"):
                     ext.pop(k, None)
                 sets["status"]           = AccountStatus.ACTIVE.value
                 sets["usage_fail_count"] = 0
@@ -587,6 +589,12 @@ class LocalAccountRepository:
                 usage_use_count,
                 usage_fail_count,
                 last_use_at,
+                CASE WHEN json_valid(ext)
+                     THEN COALESCE(json_extract(ext, '$.invalid_recheck_count'), 0)
+                     ELSE 0 END AS invalid_recheck_count,
+                CASE WHEN json_valid(ext)
+                          AND json_extract(ext, '$.invalid_recheck_confirmed_at') IS NOT NULL
+                     THEN 1 ELSE 0 END AS invalid_confirmed,
                 {quota_select}
             FROM {_TBL}
             WHERE deleted_at IS NULL
@@ -603,7 +611,7 @@ class LocalAccountRepository:
 
         return await asyncio.to_thread(_sync)
 
-    async def list_invalid_tokens(self) -> list[str]:
+    async def list_confirmed_invalid_tokens(self) -> list[str]:
         def _sync() -> list[str]:
             with closing(self._connect()) as conn:
                 rows = conn.execute(
@@ -611,13 +619,12 @@ class LocalAccountRepository:
                     SELECT token
                     FROM {_TBL}
                     WHERE deleted_at IS NULL
-                      AND status NOT IN (?, ?, ?, ?)
+                      AND status = ?
+                      AND json_valid(ext)
+                      AND json_extract(ext, '$.invalid_recheck_confirmed_at') IS NOT NULL
                     ORDER BY updated_at DESC
                     """,
                     (
-                        AccountStatus.ACTIVE.value,
-                        AccountStatus.COOLING.value,
-                        AccountStatus.DISABLED.value,
                         AccountStatus.EXPIRED.value,  # EXPIRED 是配额误判，不当作垃圾删除
                     ),
                 )

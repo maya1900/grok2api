@@ -17,7 +17,6 @@ from fastapi.responses import Response
 from pydantic import BaseModel, RootModel
 
 from app.platform.errors import AppError, ErrorKind, ValidationError
-from app.platform.config.snapshot import get_config
 from app.platform.logging.logger import logger
 from app.platform.runtime.clock import now_ms
 from app.control.account.commands import (
@@ -131,6 +130,8 @@ def _serialize_record(r) -> dict:
         "fail_count":  r.usage_fail_count or 0,
         "last_used_at": r.last_use_at,
         "tags":        r.tags or [],
+        "invalid_recheck_count": int((r.ext or {}).get("invalid_recheck_count", 0) or 0),
+        "invalid_confirmed": bool((r.ext or {}).get("invalid_recheck_confirmed_at")),
     }
 
 
@@ -187,17 +188,14 @@ async def _list_token_payloads(repo: "AccountRepository") -> list[dict]:
 
 
 async def _list_invalid_tokens(repo: "AccountRepository") -> list[str]:
-    fast_list = getattr(repo, "list_invalid_tokens", None)
+    fast_list = getattr(repo, "list_confirmed_invalid_tokens", None)
     if callable(fast_list):
         return await fast_list()
     return [
         item["token"]
         for item in await _list_token_payloads(repo)
-        if item.get("status") not in (
-            AccountStatus.ACTIVE.value,
-            AccountStatus.COOLING.value,
-            AccountStatus.DISABLED.value,
-        )
+        if item.get("status") == AccountStatus.EXPIRED.value
+        and item.get("invalid_confirmed")
     ]
 
 

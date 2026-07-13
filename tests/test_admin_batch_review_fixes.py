@@ -10,7 +10,7 @@ from app.control.account.models import AccountRecord
 from app.control.account.refresh import RefreshResult
 from app.control.account.backends.redis import RedisAccountRepository
 from app.platform.errors import ValidationError
-from app.products.web.admin.batch import BatchRequest, batch_refresh
+from app.products.web.admin.batch import BatchRequest, batch_refresh, batch_recheck_invalid
 from app.products.web.admin import tokens as admin_tokens
 
 
@@ -19,6 +19,7 @@ class _Repo:
         self.records = {
             "active-token": AccountRecord(token="active-token", status=AccountStatus.ACTIVE),
             "disabled-token": AccountRecord(token="disabled-token", status=AccountStatus.DISABLED),
+            "expired-token": AccountRecord(token="expired-token", status=AccountStatus.EXPIRED),
         }
         self.requested_tokens: list[str] = []
 
@@ -34,6 +35,10 @@ class _RefreshService:
     async def refresh_tokens(self, tokens: list[str]) -> RefreshResult:
         self.refreshed_tokens.extend(tokens)
         return RefreshResult(refreshed=len(tokens))
+
+    async def recheck_expired_token(self, token: str) -> dict:
+        self.refreshed_tokens.append(token)
+        return {"outcome": "invalid", "checks": 1}
 
 
 class _Pipeline:
@@ -89,7 +94,13 @@ class AdminBatchReviewFixTests(unittest.IsolatedAsyncioTestCase):
         body = orjson.loads(response.body)
         self.assertEqual(repo.requested_tokens, ["active-token", "disabled-token"])
         self.assertEqual(refresh_svc.refreshed_tokens, ["active-token"])
-        self.assertEqual(body["summary"], {"total": 1, "ok": 1, "fail": 0})
+        self.assertEqual(body["summary"], {
+            "total": 1,
+            "ok": 1,
+            "fail": 0,
+            "expired": 0,
+            "transient": 0,
+        })
 
     async def test_batch_refresh_rejects_only_non_manageable_explicit_tokens(self):
         repo = _Repo()
@@ -107,6 +118,23 @@ class AdminBatchReviewFixTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("No manageable tokens available", str(cm.exception))
         self.assertEqual(refresh_svc.refreshed_tokens, [])
+
+    async def test_batch_recheck_invalid_only_accepts_expired_tokens(self):
+        repo = _Repo()
+        refresh_svc = _RefreshService()
+
+        response = await batch_recheck_invalid(
+            BatchRequest(tokens=["active-token", "expired-token"]),
+            async_mode=False,
+            all_expired=False,
+            concurrency=1,
+            repo=repo,
+            refresh_svc=refresh_svc,
+        )
+
+        body = orjson.loads(response.body)
+        self.assertEqual(refresh_svc.refreshed_tokens, ["expired-token"])
+        self.assertEqual(body["summary"]["invalid"], 1)
 
 
 class RedisRepositoryReviewFixTests(unittest.IsolatedAsyncioTestCase):

@@ -941,6 +941,9 @@
       <button type="button" onclick="batchRefreshAllManageable()" id="btn-refresh-all" class="toolbar-icon-btn">
         <svg viewBox="0 0 24 24" stroke-width="1.8"><path d="M20 11a8 8 0 0 0-14.6-4.6"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14.6 4.6"/><path d="M20 20v-5h-5"/><path d="M12 8v4l3 2"/></svg>
       </button>
+      <button type="button" onclick="batchRecheckAllInvalid()" id="btn-recheck-invalid-all" class="toolbar-icon-btn">
+        <svg viewBox="0 0 24 24" stroke-width="1.8"><path d="M20 11a8 8 0 0 0-14.6-4.6"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14.6 4.6"/><path d="M20 20v-5h-5"/><path d="M9 12h6"/><path d="M12 9v6"/></svg>
+      </button>
       <button type="button" onclick="deleteAllInvalid()" id="btn-delete-invalid-all" class="toolbar-icon-btn toolbar-icon-btn-danger">
         <svg viewBox="0 0 24 24" stroke-width="1.8"><path d="M5 7h14"/><path d="M9 7V4h6v3"/><path d="M8 10v7"/><path d="M12 10v7"/><path d="M16 10v7"/><path d="M7 7l1 13h8l1-13"/><path d="M12 2v2"/></svg>
       </button>
@@ -952,6 +955,9 @@
       </button>
       <button type="button" onclick="batchRefreshSel()" id="btn-refresh" class="toolbar-icon-btn" style="display:none">
         <svg viewBox="0 0 24 24" stroke-width="1.8"><path d="M20 11a8 8 0 0 0-14.6-4.6"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14.6 4.6"/><path d="M20 20v-5h-5"/></svg>
+      </button>
+      <button type="button" onclick="batchRecheckInvalidSel()" id="btn-recheck-invalid" class="toolbar-icon-btn" style="display:none">
+        <svg viewBox="0 0 24 24" stroke-width="1.8"><path d="M20 11a8 8 0 0 0-14.6-4.6"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14.6 4.6"/><path d="M20 20v-5h-5"/><path d="M9 12h6"/></svg>
       </button>
       <button type="button" onclick="batchDisableSel()" id="btn-disable" class="toolbar-icon-btn" style="display:none">
         <svg viewBox="0 0 24 24" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><path d="M8.5 8.5 15.5 15.5"/></svg>
@@ -1157,9 +1163,11 @@ function applyAccountI18n() {
     ['btn-export', 'account.export', '导出数据'],
     ['btn-nsfw-all', 'account.batchNsfwAll', '全部开启 NSFW'],
     ['btn-refresh-all', 'account.refreshAllManageable', '重新测试全部正常账户'],
+    ['btn-recheck-invalid-all', 'account.recheckInvalidAll', '复检全部异常账户'],
     ['btn-delete-invalid-all', 'account.deleteInvalidAll', '删除全部异常'],
     ['btn-nsfw', 'account.batchNsfw', '开启 NSFW'],
     ['btn-refresh', 'account.batchRefresh', '刷新选中'],
+    ['btn-recheck-invalid', 'account.recheckInvalidSelected', '复检选中异常'],
     ['btn-disable', 'account.batchDisable', '禁用选中'],
     ['btn-restore', 'account.batchRestore', '恢复选中'],
     ['btn-delete', 'account.batchDelete', '删除选中'],
@@ -1532,7 +1540,7 @@ function rowHtml(t) {
         </button>
       </div></td>
     <td class="table-center"><span class="badge badge-${t.pool||'basic'}">${xe(poolLabel(t.pool || 'basic'))}</span></td>
-    <td class="table-center">${statusBadge(t.status)}</td>
+    <td class="table-center">${statusBadge(t)}</td>
     <td data-quota-only><div class="quota-cell">${qpills(q)}</div></td>
     <td class="table-center" style="font-variant-numeric:tabular-nums;color:#8f8f8f">${success}</td>
     <td class="table-center" style="font-variant-numeric:tabular-nums;color:#9a9a9a">${fail}</td>
@@ -1545,13 +1553,13 @@ function rowHtml(t) {
           ? '<svg viewBox="0 0 24 24" stroke-width="1.8"><path d="M3 12a9 9 0 1 0 3-6.708"/><path d="M3 4v5h5"/></svg>'
           : '<svg viewBox="0 0 24 24" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><path d="M8.5 8.5 15.5 15.5"/></svg>'}
       </button>
-      <button onclick="refreshOne('${xe(t.token)}')" class="row-icon-btn${isRefreshing ? ' is-loading' : ''}" data-tip="${xe(isRefreshing ? tr('account.refreshing', { n: 1 }, '正在刷新 1 个账户…') : tr('account.actionRefresh', null, '刷新 Usage'))}" aria-label="${xe(tr('account.actionRefresh', null, '刷新 Usage'))}">
+      <button onclick="${t.status === 'expired' ? `recheckOne('${xe(t.token)}')` : `refreshOne('${xe(t.token)}')`}" class="row-icon-btn${isRefreshing ? ' is-loading' : ''}" data-tip="${xe(isRefreshing ? tr('account.refreshing', { n: 1 }, '正在刷新 1 个账户…') : (t.status === 'expired' ? '复检异常账号' : tr('account.actionRefresh', null, '刷新 Usage')))}" aria-label="${xe(t.status === 'expired' ? '复检异常账号' : tr('account.actionRefresh', null, '刷新 Usage'))}">
         <svg viewBox="0 0 24 24" stroke-width="1.8"><path d="M20 11a8 8 0 0 0-14.6-4.6"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14.6 4.6"/><path d="M20 20v-5h-5"/></svg>
       </button>
       <button onclick="openEdit('${xe(t.token)}')" class="row-icon-btn" data-tip="${xe(tr('account.actionEdit', null, '编辑'))}" aria-label="${xe(tr('account.actionEdit', null, '编辑'))}">
         <svg viewBox="0 0 24 24" stroke-width="1.8"><path d="m4 20 4.5-1 9.5-9.5-3.5-3.5L5 15.5z"/><path d="m13.5 5.5 3.5 3.5"/></svg>
       </button>
-      <button onclick="doDelete(['${xe(t.token)}'])" class="row-icon-btn row-icon-danger" data-tip="${xe(tr('account.actionDelete', null, '删除'))}" aria-label="${xe(tr('account.actionDelete', null, '删除'))}">
+      <button ${t.status === 'expired' && !t.invalid_confirmed ? 'disabled' : `onclick="doDelete(['${xe(t.token)}'])"`} class="row-icon-btn row-icon-danger" data-tip="${xe(t.status === 'expired' && !t.invalid_confirmed ? '需连续复检两次确认后才能删除' : tr('account.actionDelete', null, '删除'))}" aria-label="${xe(t.status === 'expired' && !t.invalid_confirmed ? '需连续复检两次确认后才能删除' : tr('account.actionDelete', null, '删除'))}">
         <svg viewBox="0 0 24 24" stroke-width="1.8"><path d="M5 7h14"/><path d="M9 7V4h6v3"/><path d="M8 10v7"/><path d="M12 10v7"/><path d="M16 10v7"/><path d="M7 7l1 13h8l1-13"/></svg>
         </button>
     </div></td>
@@ -1634,8 +1642,8 @@ function toggleRow(el) {
 }
 function updateBatchBtns() {
   const show = sel.size > 0;
-  const globalBtns = ['btn-nsfw-all','btn-refresh-all','btn-delete-invalid-all'];
-  const selectionBtns = ['btn-nsfw','btn-refresh','btn-disable','btn-restore','btn-delete','btn-delete-invalid'];
+  const globalBtns = ['btn-nsfw-all','btn-refresh-all','btn-recheck-invalid-all','btn-delete-invalid-all'];
+  const selectionBtns = ['btn-nsfw','btn-refresh','btn-recheck-invalid','btn-disable','btn-restore','btn-delete','btn-delete-invalid'];
   
   globalBtns.forEach(id => document.getElementById(id).style.display = show ? 'none' : '');
   selectionBtns.forEach(id => document.getElementById(id).style.display = show ? '' : 'none');
@@ -1662,7 +1670,8 @@ function fmtDate(d) {
     ? tr('account.na', null, '—')
     : dt.toLocaleDateString(I18n.getLang() === 'en' ? 'en-US' : 'zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
 }
-function statusBadge(s) {
+function statusBadge(item) {
+  const s = item?.status;
   const m = {
     active:['badge-active', tr('account.status.active', null, '正常')],
     cooling:['badge-cooling', tr('account.status.cooling', null, '限流')],
@@ -1671,6 +1680,12 @@ function statusBadge(s) {
     invalid:['badge-invalid', tr('account.status.invalid', null, '异常')],
   };
   const [cls, label] = m[s] || ['badge-invalid', s || tr('account.unknown', null, '未知')];
+  if (s === 'expired' && item.invalid_confirmed) {
+    return `<span class="badge badge-invalid">已确认异常</span>`;
+  }
+  if (s === 'expired' && (item.invalid_recheck_count || 0) > 0) {
+    return `<span class="badge ${cls}">${label} · ${item.invalid_recheck_count}/2</span>`;
+  }
   return `<span class="badge ${cls}">${label}</span>`;
 }
 async function copy(t) {
@@ -1864,7 +1879,15 @@ function doDelete(tokens) {
       } catch (e) { showToast(`${tr('account.deleteFailed', null, '删除失败')}: ${e.message}`, 'error'); }
     });
 }
-function batchDeleteSel() { if (sel.size) doDelete([...sel]); }
+function batchDeleteSel() {
+  if (!sel.size) return;
+  const tokens = allTokens
+    .filter(t => sel.has(t.token) && (t.status !== 'expired' || t.invalid_confirmed))
+    .map(t => t.token);
+  if (!tokens.length) return showToast('异常账号需连续复检两次确认后才能删除', 'error');
+  if (tokens.length < sel.size) showToast(`已跳过 ${sel.size - tokens.length} 个尚未确认的异常账号`, 'warning');
+  doDelete(tokens);
+}
 
 function selectedInvalidTokens() {
   return allTokens
@@ -1872,19 +1895,29 @@ function selectedInvalidTokens() {
     .map(t => t.token);
 }
 
+function selectedConfirmedInvalidTokens() {
+  return allTokens
+    .filter(t => sel.has(t.token) && t.status === 'expired' && t.invalid_confirmed)
+    .map(t => t.token);
+}
+
+function confirmedInvalidCount() {
+  return allTokens.filter(t => t.status === 'expired' && t.invalid_confirmed).length;
+}
+
 function invalidTokenCount() {
   return allTokens.filter(t => isInvalidStatus(t.status)).length;
 }
 
 function batchDeleteInvalidSel() {
-  const tokens = selectedInvalidTokens();
-  if (!tokens.length) return showToast(tr('account.noInvalidSelected', null, '选中项中没有异常账户'), 'error');
+  const tokens = selectedConfirmedInvalidTokens();
+  if (!tokens.length) return showToast('选中项中没有经过两次复检确认的异常账户', 'error');
   doDelete(tokens);
 }
 
 function deleteAllInvalid() {
-  const total = invalidTokenCount();
-  if (!total) return showToast(tr('account.noInvalidAccounts', null, '没有可删除的异常账户'), 'error');
+  const total = confirmedInvalidCount();
+  if (!total) return showToast('没有经过两次复检确认、可安全删除的异常账户', 'error');
   openConfirm(
     tr('account.deleteInvalidAllTitle', null, '删除全部异常账户'),
     tr('account.deleteInvalidAllBody', { n: total }, `确认删除全部 <b>${total}</b> 个异常账户？<br><small style="color:var(--error)">此操作不可撤销。确认后还需要输入 DELETE。</small>`),
@@ -1916,9 +1949,9 @@ async function _runBatch(endpoint, tokens, label, onDone) {
   }
   _batchStarting = true;
   const btnCancel = document.getElementById('btn-batch-cancel');
-  const globalActionIds = ['btn-nsfw-all','btn-refresh-all','btn-delete-invalid-all'];
+  const globalActionIds = ['btn-nsfw-all','btn-refresh-all','btn-recheck-invalid-all','btn-delete-invalid-all'];
   globalActionIds.forEach(id => document.getElementById(id).style.display = 'none');
-  ['btn-nsfw','btn-refresh','btn-disable','btn-restore','btn-delete','btn-delete-invalid'].forEach(id =>
+  ['btn-nsfw','btn-refresh','btn-recheck-invalid','btn-disable','btn-restore','btn-delete','btn-delete-invalid'].forEach(id =>
     document.getElementById(id).style.display = 'none');
   btnCancel.style.display = '';
 
@@ -2006,6 +2039,22 @@ async function refreshOne(token) {
     showToast(tr('account.refreshDone', { ok: d.summary?.ok ?? 0, fail: d.summary?.fail ?? 0 }, `刷新完成：成功 ${d.summary?.ok??0}，失败 ${d.summary?.fail??0}`), 'success');
     await load();
   } catch (e) { showToast(`${tr('account.refreshFailed', null, '刷新失败')}: ${e.message}`, 'error'); }
+  finally {
+    refreshingTokens.delete(token);
+    renderTable();
+  }
+}
+
+async function recheckOne(token) {
+  if (refreshingTokens.has(token)) return;
+  refreshingTokens.add(token);
+  renderTable();
+  try {
+    const d = await _api('POST', '/batch/recheck-invalid', { tokens:[token] });
+    const s = d.summary || {};
+    _recheckDone(s.ok || 0, s.fail || 0, s);
+    await load();
+  } catch (e) { showToast(`复检失败: ${e.message}`, 'error'); }
   finally {
     refreshingTokens.delete(token);
     renderTable();
@@ -2127,6 +2176,37 @@ function batchRefreshAllManageable() {
         showToast(msg, fail > 0 ? 'warning' : 'success');
       }
     )
+  );
+}
+
+function _recheckDone(ok, fail, s) {
+  const recovered = s?.recovered ?? 0;
+  const invalid = s?.invalid ?? 0;
+  const confirmed = s?.confirmed_invalid ?? 0;
+  const transient = fail;
+  showToast(
+    `复检完成：恢复 ${recovered}，首次确认 ${invalid}，已确认异常 ${confirmed}，临时失败 ${transient}`,
+    transient > 0 ? 'warning' : 'success'
+  );
+}
+
+function batchRecheckInvalidSel() {
+  const tokens = selectedInvalidTokens();
+  if (!tokens.length) return showToast('选中项中没有可复检的异常账户', 'error');
+  openConfirm(
+    '复检选中异常账户',
+    `复检选中的 <b>${tokens.length}</b> 个异常账户？<br><small style="color:var(--fg-muted)">连续两次明确凭据失效后才会允许删除；临时网络错误不会累计。</small>`,
+    async () => _runBatch('/batch/recheck-invalid', tokens, `正在复检 ${tokens.length} 个异常账户…`, _recheckDone)
+  );
+}
+
+function batchRecheckAllInvalid() {
+  const n = invalidTokenCount();
+  if (!n) return showToast('没有可复检的异常账户', 'error');
+  openConfirm(
+    '复检全部异常账户',
+    `复检全部 <b>${n}</b> 个异常账户？<br><small style="color:var(--fg-muted)">该操作会调用上游接口，数量较多时耗时较长。需要连续执行两轮且均明确失效，账号才会变为可删除。</small>`,
+    async () => _runBatch('/batch/recheck-invalid?all_expired=true', [], `正在复检 ${n} 个异常账户…`, _recheckDone)
   );
 }
 

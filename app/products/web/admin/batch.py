@@ -21,6 +21,7 @@ from app.platform.logging.logger import logger
 from app.platform.runtime.batch import run_batch
 from app.platform.runtime.task import create_task, expire_task, get_task
 from app.control.account.commands import AccountPatch, ListAccountsQuery
+from app.control.account.enums import AccountStatus
 from app.control.account.state_machine import is_manageable
 
 if TYPE_CHECKING:
@@ -70,6 +71,31 @@ async def _filter_manageable_tokens(repo: "AccountRepository", tokens: list[str]
     return [token for token in unique_tokens if (record := by_token.get(token)) and is_manageable(record)]
 
 
+async def _list_expired_tokens(repo: "AccountRepository") -> list[str]:
+    page_num, tokens = 1, []
+    while True:
+        page = await repo.list_accounts(ListAccountsQuery(
+            page=page_num,
+            page_size=2000,
+            status=AccountStatus.EXPIRED,
+        ))
+        tokens.extend(r.token for r in page.items)
+        if page_num >= page.total_pages or not page.items:
+            break
+        page_num += 1
+    return tokens
+
+
+async def _filter_expired_tokens(repo: "AccountRepository", tokens: list[str]) -> list[str]:
+    unique_tokens = list(dict.fromkeys(tokens))
+    records = await repo.get_accounts(unique_tokens)
+    by_token = {r.token: r for r in records}
+    return [
+        token for token in unique_tokens
+        if (record := by_token.get(token)) and record.status == AccountStatus.EXPIRED
+    ]
+
+
 def _json(data: Any, status_code: int = 200) -> Response:
     return Response(content=orjson.dumps(data), media_type="application/json", status_code=status_code)
 
@@ -105,6 +131,7 @@ async def _dispatch_sync(
     results: dict[str, Any] = {}
     ok_c = fail_c = 0
     failed_tokens: list[str] = []
+    outcomes: dict[str, int] = {}
 
     async def _wrapped(token: str) -> tuple[str, dict | None, str | None]:
         try:
@@ -119,6 +146,9 @@ async def _dispatch_sync(
         if err is None:
             ok_c += 1
             results[key] = data
+            outcome = str(data.get("outcome", "")) if isinstance(data, dict) else ""
+            if outcome:
+                outcomes[outcome] = outcomes.get(outcome, 0) + 1
         else:
             fail_c += 1
             failed_tokens.append(token)
@@ -139,6 +169,7 @@ async def _dispatch_sync(
             "fail": fail_c,
             "expired": expired_c,
             "transient": fail_c - expired_c,
+            **outcomes,
         },
         "results": results,
     })
@@ -156,6 +187,7 @@ async def _dispatch_async(
         try:
             results: dict[str, Any] = {}
             ok_c = fail_c = 0
+            outcomes: dict[str, int] = {}
 
             async def _one(token: str) -> None:
                 nonlocal ok_c, fail_c
@@ -167,6 +199,9 @@ async def _dispatch_async(
                         return
                     data = await handler(token)
                     ok_c += 1
+                    outcome = str(data.get("outcome", "")) if isinstance(data, dict) else ""
+                    if outcome:
+                        outcomes[outcome] = outcomes.get(outcome, 0) + 1
                     results[masked] = data
                     task.record(True, item=masked, detail=data)
                 except Exception as exc:
@@ -181,7 +216,12 @@ async def _dispatch_async(
             else:
                 task.finish({
                     "status": "success",
-                    "summary": {"total": len(tokens), "ok": ok_c, "fail": fail_c},
+                    "summary": {
+                        "total": len(tokens),
+                        "ok": ok_c,
+                        "fail": fail_c,
+                        **outcomes,
+                    },
                     "results": results,
                 })
         except Exception as exc:
@@ -308,6 +348,35 @@ async def batch_refresh(
     if all_manageable:
         logger.info("admin batch refresh all manageable: token_count={} concurrency={}", len(tokens), c)
     return await _dispatch(tokens, _refresh_one, use_async=async_mode, concurrency=c, repo=repo)
+
+
+@router.post("/recheck-invalid")
+async def batch_recheck_invalid(
+    req: BatchRequest,
+    async_mode: bool = Query(False, alias="async"),
+    all_expired: bool = Query(False),
+    concurrency: int | None = Query(None, ge=1),
+    repo: "AccountRepository" = Depends(get_repo),
+    refresh_svc: "AccountRefreshService" = Depends(get_refresh_svc),
+):
+    tokens = [t.strip() for t in req.tokens if t.strip()]
+    if all_expired and tokens:
+        raise ValidationError("tokens must be empty when all_expired=true", param="tokens")
+    if all_expired:
+        tokens = await _list_expired_tokens(repo)
+    else:
+        if not tokens:
+            raise ValidationError("No tokens provided", param="tokens")
+        tokens = await _filter_expired_tokens(repo, tokens)
+    if not tokens:
+        raise ValidationError("No expired tokens available", param="tokens")
+
+    async def _recheck_one(token: str) -> dict:
+        return await refresh_svc.recheck_expired_token(token)
+
+    c = _concurrency(concurrency, "batch.refresh_concurrency", fallback=15)
+    logger.info("admin invalid account recheck: token_count={} concurrency={}", len(tokens), c)
+    return await _dispatch(tokens, _recheck_one, use_async=async_mode, concurrency=c, repo=repo)
 
 
 @router.post("/cache-clear")

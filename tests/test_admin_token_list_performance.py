@@ -6,6 +6,7 @@ from pathlib import Path
 import orjson
 
 from app.control.account.models import AccountPage, AccountRecord
+from app.control.account.refresh import AccountRefreshService, RefreshResult
 from app.control.account.backends.local import LocalAccountRepository
 from app.control.account.commands import AccountPatch, AccountUpsert
 from app.control.account.enums import AccountStatus
@@ -41,7 +42,7 @@ class _FastInvalidRepo:
         self.payload_called = False
         self.deleted: list[str] = []
 
-    async def list_invalid_tokens(self) -> list[str]:
+    async def list_confirmed_invalid_tokens(self) -> list[str]:
         self.fast_called = True
         return ["expired-token"]
 
@@ -61,7 +62,11 @@ class _PagedRepo:
         return AccountPage(
             items=[
                 AccountRecord(token="active-token", status=AccountStatus.ACTIVE),
-                AccountRecord(token="expired-token", status=AccountStatus.EXPIRED),
+                AccountRecord(
+                    token="expired-token",
+                    status=AccountStatus.EXPIRED,
+                    ext={"invalid_recheck_confirmed_at": 123},
+                ),
             ],
             total=2,
             page=1,
@@ -71,6 +76,15 @@ class _PagedRepo:
 
     async def delete_accounts(self, tokens: list[str]):
         self.deleted = tokens
+
+
+class _StubRecheckService(AccountRefreshService):
+    def __init__(self, repository, result: RefreshResult) -> None:
+        super().__init__(repository)
+        self.result = result
+
+    async def _refresh_one(self, record, **kwargs) -> RefreshResult:
+        return self.result
 
 
 class AdminTokenListPerformanceTests(unittest.IsolatedAsyncioTestCase):
@@ -132,6 +146,77 @@ class AdminTokenListPerformanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["quota"]["auto"], {"remaining": 0, "total": 0})
         self.assertEqual(items[0]["quota"]["console"], {"remaining": 0, "total": 0})
+
+    async def test_local_repository_only_lists_confirmed_invalid_tokens(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = LocalAccountRepository(Path(tmp) / "accounts.db")
+            await repo.initialize()
+            await repo.upsert_accounts([
+                AccountUpsert(token="unconfirmed", pool="basic"),
+                AccountUpsert(token="confirmed", pool="basic"),
+            ])
+            await repo.patch_accounts([
+                AccountPatch(token="unconfirmed", status=AccountStatus.EXPIRED),
+                AccountPatch(
+                    token="confirmed",
+                    status=AccountStatus.EXPIRED,
+                    ext_merge={
+                        "invalid_recheck_count": 2,
+                        "invalid_recheck_confirmed_at": 123,
+                    },
+                ),
+            ])
+
+            tokens = await repo.list_confirmed_invalid_tokens()
+            payloads = await repo.list_token_payloads()
+
+        self.assertEqual(tokens, ["confirmed"])
+        by_token = {item["token"]: item for item in payloads}
+        self.assertFalse(by_token["unconfirmed"]["invalid_confirmed"])
+        self.assertTrue(by_token["confirmed"]["invalid_confirmed"])
+        self.assertEqual(by_token["confirmed"]["invalid_recheck_count"], 2)
+
+    async def test_expired_account_requires_two_failed_rechecks_before_delete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = LocalAccountRepository(Path(tmp) / "accounts.db")
+            await repo.initialize()
+            await repo.upsert_accounts([AccountUpsert(token="expired-token")])
+            await repo.patch_accounts([
+                AccountPatch(token="expired-token", status=AccountStatus.EXPIRED),
+            ])
+            service = _StubRecheckService(repo, RefreshResult(expired=1))
+
+            first = await service.recheck_expired_token("expired-token")
+            self.assertEqual(await repo.list_confirmed_invalid_tokens(), [])
+            second = await service.recheck_expired_token("expired-token")
+
+            self.assertEqual(first["outcome"], "invalid")
+            self.assertEqual(second["outcome"], "confirmed_invalid")
+            self.assertEqual(await repo.list_confirmed_invalid_tokens(), ["expired-token"])
+
+    async def test_successful_recheck_restores_expired_account(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = LocalAccountRepository(Path(tmp) / "accounts.db")
+            await repo.initialize()
+            await repo.upsert_accounts([AccountUpsert(token="expired-token")])
+            await repo.patch_accounts([
+                AccountPatch(
+                    token="expired-token",
+                    status=AccountStatus.EXPIRED,
+                    ext_merge={
+                        "invalid_recheck_count": 2,
+                        "invalid_recheck_confirmed_at": 123,
+                    },
+                ),
+            ])
+            service = _StubRecheckService(repo, RefreshResult(refreshed=1))
+
+            result = await service.recheck_expired_token("expired-token")
+            record = (await repo.get_accounts(["expired-token"]))[0]
+
+            self.assertEqual(result["outcome"], "recovered")
+            self.assertEqual(record.status, AccountStatus.ACTIVE)
+            self.assertNotIn("invalid_recheck_confirmed_at", record.ext)
 
     async def test_local_repository_initializes_live_updated_index(self):
         with tempfile.TemporaryDirectory() as tmp:

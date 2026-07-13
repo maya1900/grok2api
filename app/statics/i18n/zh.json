@@ -186,6 +186,8 @@
     "batchNsfwDisable": "关闭 NSFW",
     "rowActionNotSupported": "当前状态不支持此操作",
     "batchRefresh": "刷新选中",
+    "recheckInvalidAll": "复检全部异常账户",
+    "recheckInvalidSelected": "复检选中异常",
     "batchDisable": "禁用选中",
     "batchRestore": "恢复选中",
     "batchDelete": "删除选中",

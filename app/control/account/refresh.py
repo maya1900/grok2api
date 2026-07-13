@@ -10,6 +10,7 @@ from app.platform.logging.logger import logger
 from app.platform.runtime.clock import now_ms
 from app.platform.runtime.batch import run_batch
 from app.control.model.enums import ALL_MODES_FULL
+from .commands import AccountPatch
 from .enums import AccountStatus, QuotaSource
 from .models import AccountRecord, QuotaWindow
 from .quota_defaults import (
@@ -255,6 +256,46 @@ class AccountRefreshService:
         for r in results:
             agg.merge(r)
         return agg
+
+    async def recheck_expired_token(self, token: str) -> dict:
+        """Recheck one expired account without treating transient failures as invalid.
+
+        Two explicit invalid-credential rechecks are required before the account is
+        marked as confirmed invalid.  A successful refresh restores the account.
+        """
+        records = await self._repo.get_accounts([token])
+        record = records[0] if records else None
+        if record is None or record.is_deleted() or record.status != AccountStatus.EXPIRED:
+            return {"outcome": "skipped", "checks": 0}
+
+        result = await self._refresh_one(record, bootstrap=True)
+        if result.refreshed:
+            await self._repo.patch_accounts([
+                AccountPatch(token=token, clear_failures=True),
+            ])
+            return {"outcome": "recovered", "checks": 0}
+
+        if result.expired:
+            current = (await self._repo.get_accounts([token]) or [record])[0]
+            ext = dict(current.ext or {})
+            checks = int(ext.get("invalid_recheck_count", 0) or 0) + 1
+            now = now_ms()
+            patch = {
+                **ext,
+                "invalid_recheck_count": checks,
+                "invalid_recheck_last_at": now,
+            }
+            if checks >= 2:
+                patch["invalid_recheck_confirmed_at"] = now
+            await self._repo.patch_accounts([
+                AccountPatch(token=token, ext_merge=patch),
+            ])
+            return {
+                "outcome": "confirmed_invalid" if checks >= 2 else "invalid",
+                "checks": checks,
+            }
+
+        raise UpstreamError("复检未获取到真实配额数据")
 
     # ------------------------------------------------------------------
     # Per-account refresh
