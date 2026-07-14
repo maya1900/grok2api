@@ -3,6 +3,7 @@ package account
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/infra/persistence/relational"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	repositorypkg "github.com/chenyme/grok2api/backend/internal/repository"
 )
 
 type buildDetectionAdapter struct {
@@ -75,5 +77,41 @@ func TestDetectBuildAccountsUsesAvailableModelAndPreservesAccountOnProbeFailure(
 func TestChooseBuildDetectionModelPrefersObservedAvailableModel(t *testing.T) {
 	if got := chooseBuildDetectionModel("grok-account-model", []string{"grok-4.5", "grok-account-model"}); got != "grok-account-model" {
 		t.Fatalf("model = %q", got)
+	}
+}
+
+func TestDeleteInvalidBuildAccountsDeletesDisabledReauthOnly(t *testing.T) {
+	ctx := context.Background()
+	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "delete-invalid.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repository := relational.NewAccountRepository(database)
+	create := func(source string, authStatus accountdomain.AuthStatus, lastError string) accountdomain.Credential {
+		value, _, createErr := repository.UpsertByIdentity(ctx, accountdomain.Credential{
+			Provider: accountdomain.ProviderBuild, AuthType: accountdomain.AuthTypeOAuth, Name: source, SourceKey: source,
+			EncryptedAccessToken: "token", Enabled: false, AuthStatus: authStatus, LastError: lastError,
+		})
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		return value
+	}
+	invalid := create("invalid", accountdomain.AuthStatusReauthRequired, "access denied")
+	exhausted := create("exhausted", accountdomain.AuthStatusActive, "Grok Build free usage exhausted")
+	service := NewService(repository, nil, nil, nil, nil, nil, nil)
+	deleted, err := service.DeleteInvalidBuildAccounts(ctx)
+	if err != nil || deleted != 1 {
+		t.Fatalf("deleted = %d, err = %v", deleted, err)
+	}
+	if _, err := repository.Get(ctx, invalid.ID); !errors.Is(err, repositorypkg.ErrNotFound) {
+		t.Fatalf("invalid account still exists: %v", err)
+	}
+	if _, err := repository.Get(ctx, exhausted.ID); err != nil {
+		t.Fatalf("exhausted account was deleted: %v", err)
 	}
 }

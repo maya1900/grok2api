@@ -508,6 +508,7 @@ export function AccountsPage() {
   const activeAccounts = summary?.available ?? 0;
   const recoveringAccounts = summary?.recovering ?? 0;
   const attentionAccounts = summary?.attention ?? 0;
+  const invalidCredentialAccounts = summary?.issues.reauthRequired ?? 0;
   const buildSummary = summary?.providers.grok_build ?? { total: 0, available: 0 };
   const webSummary = summary?.providers.grok_web ?? { total: 0, available: 0 };
   const summaryLoading = summaryQuery.isPending;
@@ -597,7 +598,7 @@ export function AccountsPage() {
                 {hasAccounts ? <Button variant="secondary" size="sm" onClick={() => setSyncAllOpen(true)}>{t("accounts.syncAll")}</Button> : null}
                 {hasAccounts && provider === "grok_build" ? <Button variant="secondary" size="sm" onClick={() => setRenewAllOpen(true)}>{t("accounts.renewAll")}</Button> : null}
                 {hasAccounts && provider === "grok_build" ? <Button variant="secondary" size="sm" disabled={detectBuildMutation.isPending} onClick={() => detectBuildMutation.mutate(undefined)}>{detectBuildMutation.isPending ? <Spinner /> : null}{detectionProgress ? `${detectionProgress.completed}/${detectionProgress.total}` : "检测全部账号"}</Button> : null}
-                {provider === "grok_build" && attentionAccounts > 0 ? <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" disabled={deleteInvalidBuildMutation.isPending} onClick={() => deleteInvalidBuildMutation.mutate()}>{deleteInvalidBuildMutation.isPending ? <Spinner /> : null}删除异常账号</Button> : null}
+                {provider === "grok_build" && invalidCredentialAccounts > 0 ? <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" disabled={deleteInvalidBuildMutation.isPending} onClick={() => deleteInvalidBuildMutation.mutate()}>{deleteInvalidBuildMutation.isPending ? <Spinner /> : null}删除异常账号（{invalidCredentialAccounts}）</Button> : null}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild><Button size="sm">{t("accounts.connectAccount")}</Button></DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
@@ -911,11 +912,11 @@ function AccountTypeText({ label, variant }: { label: string; variant: "default"
 
 function AccountStatus({ account }: { account: AccountDTO }) {
   const { t } = useTranslation();
-  if (!account.enabled) {
-    return <Badge variant="outline" className="text-muted-foreground">{t("accounts.statusDisabled")}</Badge>;
-  }
   if (account.authStatus === "reauthRequired") {
     return <Badge variant="destructive">{t("accounts.statusReauthRequired")}</Badge>;
+  }
+  if (!account.enabled) {
+    return <Badge variant="outline" className="text-muted-foreground">{t("accounts.statusDisabled")}</Badge>;
   }
   if (account.quota.status === "waitingReset") {
     return <Badge variant="secondary" className="bg-amber-500/10 text-amber-700 dark:text-amber-300">{t("accounts.waitingReset")}</Badge>;

@@ -246,6 +246,7 @@ func TestAccountRepositorySummarizesOperationalStates(t *testing.T) {
 		t.Fatal(err)
 	}
 	reauth := create(account.ProviderWeb, "web-reauth")
+	reauth.Enabled = false
 	reauth.AuthStatus = account.AuthStatusReauthRequired
 	if _, err := repo.Update(ctx, reauth); err != nil {
 		t.Fatal(err)

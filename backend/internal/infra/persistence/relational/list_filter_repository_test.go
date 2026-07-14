@@ -66,6 +66,12 @@ func TestListFilters(t *testing.T) {
 	if err != nil || len(accountValues) != 3 || accountValues[0].Name != "disabled" || accountValues[2].Name != "paid" {
 		t.Fatalf("account name sort = %#v, err = %v", accountValues, err)
 	}
+	reauthDisabled := accountModel{IdentityKey: testIdentityKey("reauth-disabled"), Provider: "grok_build", Name: "reauth-disabled", SourceKey: "reauth-disabled", Enabled: false, AuthStatus: "reauthRequired", Priority: 1}
+	if err := database.db.WithContext(ctx).Create(&reauthDisabled).Error; err != nil {
+		t.Fatal(err)
+	}
+	assertAccountFilterCount(t, ctx, accounts, repository.AccountListFilter{Provider: "grok_build", Status: "reauthRequired", Now: now}, 1)
+	assertAccountFilterCount(t, ctx, accounts, repository.AccountListFilter{Provider: "grok_build", Status: "disabled", Now: now}, 1)
 
 	models := NewModelRepository(database)
 	for _, value := range []*modelRouteModel{
