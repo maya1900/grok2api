@@ -914,6 +914,11 @@ func (s *Service) ListBuildAccountIDs(ctx context.Context) ([]uint64, error) {
 }
 
 func (s *Service) DetectBuildAccounts(ctx context.Context, ids []uint64) (BuildDetectionResult, error) {
+	return s.DetectBuildAccountsWithProgress(ctx, ids, nil)
+}
+
+// DetectBuildAccountsWithProgress 使用共享并发池检测 Build 账号并报告完成进度。
+func (s *Service) DetectBuildAccountsWithProgress(ctx context.Context, ids []uint64, progress BatchProgressObserver) (BuildDetectionResult, error) {
 	ids, err := normalizeIDs(ids, 10000)
 	if err != nil {
 		return BuildDetectionResult{}, err
@@ -927,7 +932,17 @@ func (s *Service) DetectBuildAccounts(ctx context.Context, ids []uint64) (BuildD
 		return BuildDetectionResult{}, fmt.Errorf("Grok Build 模型 Provider 未注册")
 	}
 	type outcome string
-	results, _, runErr := batch.Map(ctx, ids, batch.Options{Workers: min(s.conversionPool.Limit(), 10), Pool: s.conversionPool}, func(workCtx context.Context, id uint64) (outcome, error) {
+	if progress != nil {
+		if err := progress(0, len(ids)); err != nil {
+			return BuildDetectionResult{}, err
+		}
+	}
+	var progressMu sync.Mutex
+	var progressErr error
+	completed := 0
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results, _, runErr := batch.MapObserved(runCtx, ids, batch.Options{Workers: s.conversionPool.Limit(), Pool: s.conversionPool}, func(workCtx context.Context, id uint64) (outcome, error) {
 		value, getErr := s.accounts.Get(workCtx, id)
 		if getErr != nil {
 			return "failed", getErr
@@ -977,6 +992,16 @@ func (s *Service) DetectBuildAccounts(ctx context.Context, ids []uint64) (BuildD
 			_, _ = s.accounts.Update(workCtx, value)
 			return "failed", nil
 		}
+	}, func(_ int, _ batch.Result[outcome]) {
+		progressMu.Lock()
+		defer progressMu.Unlock()
+		completed++
+		if progress != nil {
+			if notifyErr := progress(completed, len(ids)); notifyErr != nil && progressErr == nil {
+				progressErr = notifyErr
+				cancel()
+			}
+		}
 	})
 	result := BuildDetectionResult{}
 	for _, execution := range results {
@@ -995,7 +1020,7 @@ func (s *Service) DetectBuildAccounts(ctx context.Context, ids []uint64) (BuildD
 			result.Failed++
 		}
 	}
-	return result, runErr
+	return result, errors.Join(runErr, progressErr)
 }
 
 func chooseBuildDetectionModel(observed string, available []string) string {
@@ -1810,11 +1835,15 @@ func (s *Service) refreshTokens(ctx context.Context, ids []uint64, progress Batc
 
 // BatchRefreshBilling 使用有限并发刷新选中账号，避免大量账号同步时串行阻塞或无界创建 goroutine。
 func (s *Service) BatchRefreshBilling(ctx context.Context, ids []uint64) (int, int, error) {
+	return s.BatchRefreshBillingWithProgress(ctx, ids, nil)
+}
+
+func (s *Service) BatchRefreshBillingWithProgress(ctx context.Context, ids []uint64, progress BatchProgressObserver) (int, int, error) {
 	values, err := normalizeBatchIDs(ids)
 	if err != nil {
 		return 0, 0, err
 	}
-	return s.refreshBillings(ctx, values, nil)
+	return s.refreshBillings(ctx, values, progress)
 }
 
 func (s *Service) refreshBillings(ctx context.Context, ids []uint64, progress BatchProgressObserver) (int, int, error) {

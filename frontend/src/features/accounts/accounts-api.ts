@@ -246,7 +246,7 @@ export type AccountImportResultDTO = {
   syncFailed: number;
 };
 
-type AccountTaskStreamPayload = Partial<BuildConversionResultDTO & AccountTaskProgressDTO & AccountTokenRefreshResultDTO & AccountImportResultDTO> & {
+type AccountTaskStreamPayload = Partial<BuildConversionResultDTO & BuildDetectionResultDTO & AccountTaskProgressDTO & AccountTokenRefreshResultDTO & AccountImportResultDTO> & {
   code?: string;
   message?: string;
 };
@@ -255,6 +255,7 @@ const decodeAccountTaskStreamPayload = createObjectDecoder<AccountTaskStreamPayl
   created: isOptional(isNumber), linked: isOptional(isNumber), skipped: isOptional(isNumber), failed: isOptional(isNumber),
   synced: isOptional(isNumber), syncFailed: isOptional(isNumber), completed: isOptional(isNumber), total: isOptional(isNumber),
   phase: isOptional(isOneOf("importing", "converting", "syncing")), updated: isOptional(isNumber), succeeded: isOptional(isNumber),
+  invalid: isOptional(isNumber), exhausted: isOptional(isNumber),
   code: isOptional(isString), message: isOptional(isString),
 });
 
@@ -368,8 +369,8 @@ export function updateAccountsEnabled(ids: string[], enabled: boolean, provider:
   return apiRequest("/api/admin/v1/accounts/batch", { method: "PATCH", body: { ids, enabled, provider } }, decodeCountResult<{ updated: number }>("updated"));
 }
 
-export function refreshAccountsBilling(ids: string[], provider: "grok_build" | "grok_web"): Promise<{ succeeded: number; failed: number }> {
-  return apiRequest("/api/admin/v1/accounts/batch/refresh-billing", { method: "POST", body: { ids, provider } }, createObjectDecoder("account batch", { succeeded: isNumber, failed: isNumber }));
+export function refreshAccountsBilling(ids: string[], provider: "grok_build" | "grok_web", onProgress?: (value: AccountTaskProgressDTO) => void, signal?: AbortSignal): Promise<{ succeeded: number; failed: number }> {
+  return runAccountTask("/api/admin/v1/accounts/batch/refresh-billing", { ids, provider }, ["succeeded", "failed"], onProgress, signal);
 }
 
 export function deleteAccounts(ids: string[], provider: "grok_build" | "grok_web"): Promise<{ deleted: number }> {
@@ -378,11 +379,8 @@ export function deleteAccounts(ids: string[], provider: "grok_build" | "grok_web
 
 export type BuildDetectionResultDTO = { succeeded: number; invalid: number; exhausted: number; failed: number };
 
-export function detectBuildAccounts(ids?: string[]): Promise<BuildDetectionResultDTO> {
-  return apiRequest("/api/admin/v1/accounts/build/detect", {
-    method: "POST",
-    body: ids ? { ids, all: false } : { ids: [], all: true },
-  }, createObjectDecoder("build detection", { succeeded: isNumber, invalid: isNumber, exhausted: isNumber, failed: isNumber }));
+export function detectBuildAccounts(ids?: string[], onProgress?: (value: AccountTaskProgressDTO) => void, signal?: AbortSignal): Promise<BuildDetectionResultDTO> {
+  return runAccountTask("/api/admin/v1/accounts/build/detect", ids ? { ids, all: false } : { ids: [], all: true }, ["succeeded", "invalid", "exhausted", "failed"], onProgress, signal);
 }
 
 export function deleteInvalidBuildAccounts(): Promise<{ deleted: number }> {

@@ -81,6 +81,8 @@ export function AccountsPage() {
   const renewalAbortRef = useRef<AbortController | null>(null);
   const conversionAbortRef = useRef<AbortController | null>(null);
   const importAbortRef = useRef<AbortController | null>(null);
+  const detectionAbortRef = useRef<AbortController | null>(null);
+  const batchBillingAbortRef = useRef<AbortController | null>(null);
   const importToastRef = useRef<string | number | null>(null);
   const [provider, setProvider] = useState<"grok_build" | "grok_web">("grok_build");
   const [page, setPage] = useState(1);
@@ -93,6 +95,8 @@ export function AccountsPage() {
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [buildDetectionResult, setBuildDetectionResult] = useState<BuildDetectionResultDTO | null>(null);
+  const [detectionProgress, setDetectionProgress] = useState<AccountTaskProgressDTO | null>(null);
+  const [batchBillingProgress, setBatchBillingProgress] = useState<AccountTaskProgressDTO | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [syncAllOpen, setSyncAllOpen] = useState(false);
   const [syncProgress, setSyncProgress] = useState<AccountTaskProgressDTO | null>(null);
@@ -114,6 +118,8 @@ export function AccountsPage() {
     renewalAbortRef.current?.abort();
     conversionAbortRef.current?.abort();
     importAbortRef.current?.abort();
+    detectionAbortRef.current?.abort();
+    batchBillingAbortRef.current?.abort();
     if (importToastRef.current !== null) toast.dismiss(importToastRef.current);
   }, []);
 
@@ -321,13 +327,19 @@ export function AccountsPage() {
   });
 
   const batchBillingMutation = useMutation({
-    mutationFn: () => refreshAccountsBilling([...selected], provider),
+    mutationFn: () => {
+      const controller = new AbortController();
+      batchBillingAbortRef.current = controller;
+      setBatchBillingProgress(null);
+      return refreshAccountsBilling([...selected], provider, setBatchBillingProgress, controller.signal);
+    },
     onSuccess: (result) => {
       setSelected(new Set());
       invalidateAccountData();
       toast.success(t("accounts.batchBillingRefreshed", result));
     },
-    onError: showError,
+    onError: (error) => { if (!isAbortError(error)) showError(error); },
+    onSettled: () => { batchBillingAbortRef.current = null; setBatchBillingProgress(null); },
   });
 
   const batchDeleteMutation = useMutation({
@@ -342,14 +354,20 @@ export function AccountsPage() {
   });
 
   const detectBuildMutation = useMutation({
-    mutationFn: (ids?: string[]) => detectBuildAccounts(ids),
+    mutationFn: (ids?: string[]) => {
+      const controller = new AbortController();
+      detectionAbortRef.current = controller;
+      setDetectionProgress(null);
+      return detectBuildAccounts(ids, setDetectionProgress, controller.signal);
+    },
     onSuccess: (result) => {
       setSelected(new Set());
       invalidateAccountData();
       setBuildDetectionResult(result.invalid > 0 ? result : null);
       toast.success(`检测完成：已启用 ${result.succeeded}，异常 ${result.invalid}，额度耗尽 ${result.exhausted}，失败 ${result.failed}`);
     },
-    onError: showError,
+    onError: (error) => { if (!isAbortError(error)) showError(error); },
+    onSettled: () => { detectionAbortRef.current = null; setDetectionProgress(null); },
   });
 
   const deleteInvalidBuildMutation = useMutation({
@@ -569,8 +587,8 @@ export function AccountsPage() {
                 <Button variant="secondary" size="sm" onClick={() => batchUpdateMutation.mutate(true)}>{t("common.enable")}</Button>
                 <Button variant="secondary" size="sm" onClick={() => batchUpdateMutation.mutate(false)}>{t("common.disable")}</Button>
                 {provider === "grok_web" ? <Button variant="secondary" size="sm" onClick={() => setConversionTargets([...selected])}>{t("accounts.convertToBuild")}</Button> : null}
-                {provider === "grok_build" ? <Button variant="secondary" size="sm" onClick={() => batchBillingMutation.mutate()}>{t("accounts.refreshBilling")}</Button> : null}
-                {provider === "grok_build" ? <Button variant="secondary" size="sm" disabled={detectBuildMutation.isPending} onClick={() => detectBuildMutation.mutate([...selected])}>{detectBuildMutation.isPending ? <Spinner /> : null}检测账号</Button> : null}
+                {provider === "grok_build" ? <Button variant="secondary" size="sm" disabled={batchBillingMutation.isPending} onClick={() => batchBillingMutation.mutate()}>{batchBillingMutation.isPending ? <Spinner /> : null}{batchBillingProgress ? `${batchBillingProgress.completed}/${batchBillingProgress.total}` : t("accounts.refreshBilling")}</Button> : null}
+                {provider === "grok_build" ? <Button variant="secondary" size="sm" disabled={detectBuildMutation.isPending} onClick={() => detectBuildMutation.mutate([...selected])}>{detectBuildMutation.isPending ? <Spinner /> : null}{detectionProgress ? `${detectionProgress.completed}/${detectionProgress.total}` : "检测账号"}</Button> : null}
                 <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => setBatchDeleteOpen(true)}>{t("common.delete")}</Button>
               </div>
             ) : (
@@ -578,7 +596,7 @@ export function AccountsPage() {
                 {provider === "grok_web" && webSummary.total > 0 ? <Button variant="secondary" size="sm" onClick={() => setConversionTargets("all")}>{t("accountBulk.convertAllToBuild")}</Button> : null}
                 {hasAccounts ? <Button variant="secondary" size="sm" onClick={() => setSyncAllOpen(true)}>{t("accounts.syncAll")}</Button> : null}
                 {hasAccounts && provider === "grok_build" ? <Button variant="secondary" size="sm" onClick={() => setRenewAllOpen(true)}>{t("accounts.renewAll")}</Button> : null}
-                {hasAccounts && provider === "grok_build" ? <Button variant="secondary" size="sm" disabled={detectBuildMutation.isPending} onClick={() => detectBuildMutation.mutate(undefined)}>{detectBuildMutation.isPending ? <Spinner /> : null}检测全部账号</Button> : null}
+                {hasAccounts && provider === "grok_build" ? <Button variant="secondary" size="sm" disabled={detectBuildMutation.isPending} onClick={() => detectBuildMutation.mutate(undefined)}>{detectBuildMutation.isPending ? <Spinner /> : null}{detectionProgress ? `${detectionProgress.completed}/${detectionProgress.total}` : "检测全部账号"}</Button> : null}
                 {provider === "grok_build" && attentionAccounts > 0 ? <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" disabled={deleteInvalidBuildMutation.isPending} onClick={() => deleteInvalidBuildMutation.mutate()}>{deleteInvalidBuildMutation.isPending ? <Spinner /> : null}删除异常账号</Button> : null}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild><Button size="sm">{t("accounts.connectAccount")}</Button></DropdownMenuTrigger>

@@ -49,12 +49,19 @@ func TestDetectBuildAccountsUsesAvailableModelAndPreservesAccountOnProbeFailure(
 	}
 	adapter := &buildDetectionAdapter{status: http.StatusNotFound}
 	service := NewService(repository, nil, nil, nil, provider.NewRegistry(adapter), nil, nil)
-	result, err := service.DetectBuildAccounts(ctx, []uint64{credential.ID})
+	progress := make([][2]int, 0, 2)
+	result, err := service.DetectBuildAccountsWithProgress(ctx, []uint64{credential.ID}, func(completed, total int) error {
+		progress = append(progress, [2]int{completed, total})
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Failed != 1 || result.Succeeded != 0 || adapter.model != "grok-4.5" {
 		t.Fatalf("result = %#v, probe model = %q", result, adapter.model)
+	}
+	if len(progress) != 2 || progress[0] != [2]int{0, 1} || progress[1] != [2]int{1, 1} {
+		t.Fatalf("progress = %#v", progress)
 	}
 	stored, err := repository.Get(ctx, credential.ID)
 	if err != nil {

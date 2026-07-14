@@ -416,12 +416,14 @@ func (h *Handler) batchRefreshBilling(c *gin.Context) {
 		}
 		return
 	}
-	succeeded, failed, err := h.service.BatchRefreshBilling(c.Request.Context(), ids)
+	stream := newAccountEventStream(c)
+	defer stream.Close()
+	succeeded, failed, err := h.service.BatchRefreshBillingWithProgress(c.Request.Context(), ids, stream.ProgressObserver())
 	if err != nil {
-		h.writeServiceError(c, "billingBatchRefreshFailed", err, http.StatusBadGateway, "批量同步账号额度失败")
+		stream.WriteError("billingBatchRefreshFailed", "批量同步账号额度失败")
 		return
 	}
-	response.Success(c, http.StatusOK, gin.H{"succeeded": succeeded, "failed": failed})
+	_ = stream.Write("complete", gin.H{"succeeded": succeeded, "failed": failed})
 }
 
 func (h *Handler) get(c *gin.Context) {
@@ -522,12 +524,14 @@ func (h *Handler) detectBuildAccounts(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
 		return
 	}
-	result, err := h.service.DetectBuildAccounts(c.Request.Context(), ids)
+	stream := newAccountEventStream(c)
+	defer stream.Close()
+	result, err := h.service.DetectBuildAccountsWithProgress(c.Request.Context(), ids, stream.ProgressObserver())
 	if err != nil {
-		response.Error(c, http.StatusBadGateway, "accountDetectionFailed", "检测 Build 账号失败")
+		stream.WriteError("accountDetectionFailed", "检测 Build 账号失败")
 		return
 	}
-	response.Success(c, http.StatusOK, gin.H{"succeeded": result.Succeeded, "invalid": result.Invalid, "exhausted": result.Exhausted, "failed": result.Failed})
+	_ = stream.Write("complete", gin.H{"succeeded": result.Succeeded, "invalid": result.Invalid, "exhausted": result.Exhausted, "failed": result.Failed})
 }
 
 func (h *Handler) deleteInvalidBuildAccounts(c *gin.Context) {
