@@ -57,6 +57,7 @@ import {
   type AccountDTO,
   type AccountUpdateInput,
   type AccountTaskProgressDTO,
+  type BuildDetectionResultDTO,
   type BuildConversionInput,
   type DeviceSessionDTO,
   type QuotaDTO,
@@ -91,6 +92,7 @@ export function AccountsPage() {
   const [sort, setSort] = useState<TableSort>({ field: "createdAt", order: "desc" });
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
+  const [buildDetectionResult, setBuildDetectionResult] = useState<BuildDetectionResultDTO | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [syncAllOpen, setSyncAllOpen] = useState(false);
   const [syncProgress, setSyncProgress] = useState<AccountTaskProgressDTO | null>(null);
@@ -344,7 +346,8 @@ export function AccountsPage() {
     onSuccess: (result) => {
       setSelected(new Set());
       invalidateAccountData();
-      toast.success(`检测完成：可用 ${result.succeeded}，异常 ${result.invalid}，额度耗尽 ${result.exhausted}，失败 ${result.failed}`);
+      setBuildDetectionResult(result.invalid > 0 ? result : null);
+      toast.success(`检测完成：已启用 ${result.succeeded}，异常 ${result.invalid}，额度耗尽 ${result.exhausted}，失败 ${result.failed}`);
     },
     onError: showError,
   });
@@ -352,6 +355,7 @@ export function AccountsPage() {
   const deleteInvalidBuildMutation = useMutation({
     mutationFn: deleteInvalidBuildAccounts,
     onSuccess: (result) => {
+      setBuildDetectionResult(null);
       invalidateAccountData();
       toast.success(`已删除 ${result.deleted} 个异常 Build 账号`);
     },
@@ -812,6 +816,23 @@ export function AccountsPage() {
         <AlertDialogContent>
           <AlertDialogHeader><AlertDialogTitle>{t("accounts.batchDeleteTitle", { count: selected.size })}</AlertDialogTitle><AlertDialogDescription>{t("accounts.deleteDescription")}</AlertDialogDescription></AlertDialogHeader>
           <AlertDialogFooter><AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel><AlertDialogAction className="bg-destructive text-white hover:bg-destructive/90" onClick={() => batchDeleteMutation.mutate()}>{t("common.delete")}</AlertDialogAction></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={buildDetectionResult !== null} onOpenChange={(open) => !open && setBuildDetectionResult(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>检测完成</AlertDialogTitle>
+            <AlertDialogDescription>
+              已自动启用 {buildDetectionResult?.succeeded ?? 0} 个可用账号；发现 {buildDetectionResult?.invalid ?? 0} 个凭据异常账号并已停用。是否立即删除这些异常账号？额度耗尽账号只会停用，不会删除。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>暂不删除</AlertDialogCancel>
+            <AlertDialogAction className="bg-destructive text-white hover:bg-destructive/90" disabled={deleteInvalidBuildMutation.isPending} onClick={() => deleteInvalidBuildMutation.mutate()}>
+              {deleteInvalidBuildMutation.isPending ? <Spinner /> : null}删除异常账号
+            </AlertDialogAction>
+          </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </div>
