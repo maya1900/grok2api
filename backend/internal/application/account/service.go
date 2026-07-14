@@ -922,6 +922,10 @@ func (s *Service) DetectBuildAccounts(ctx context.Context, ids []uint64) (BuildD
 	if !ok {
 		return BuildDetectionResult{}, fmt.Errorf("Grok Build Provider 未注册")
 	}
+	modelAdapter, ok := s.providers.Models(accountdomain.ProviderBuild)
+	if !ok {
+		return BuildDetectionResult{}, fmt.Errorf("Grok Build 模型 Provider 未注册")
+	}
 	type outcome string
 	results, _, runErr := batch.Map(ctx, ids, batch.Options{Workers: min(s.conversionPool.Limit(), 10), Pool: s.conversionPool}, func(workCtx context.Context, id uint64) (outcome, error) {
 		value, getErr := s.accounts.Get(workCtx, id)
@@ -935,8 +939,13 @@ func (s *Service) DetectBuildAccounts(ctx context.Context, ids []uint64) (BuildD
 		if getErr != nil {
 			return "failed", getErr
 		}
-		body, _ := json.Marshal(map[string]any{"model": "grok-4.5-build-free", "input": "Reply with OK only.", "max_output_tokens": 8, "stream": false})
-		response, requestErr := adapter.ForwardResponse(workCtx, provider.ResponseResourceRequest{Credential: value, Method: http.MethodPost, Path: "/responses", Body: body, Model: "grok-4.5-build-free", Operation: "responses"})
+		models, listErr := modelAdapter.ListModels(workCtx, value)
+		if listErr != nil || len(models) == 0 {
+			return "failed", listErr
+		}
+		probeModel := chooseBuildDetectionModel(value.ObservedModel, models)
+		body, _ := json.Marshal(map[string]any{"model": probeModel, "input": "Reply with OK only.", "max_output_tokens": 8, "stream": false})
+		response, requestErr := adapter.ForwardResponse(workCtx, provider.ResponseResourceRequest{Credential: value, Method: http.MethodPost, Path: "/responses", Body: body, Model: probeModel, Operation: "responses"})
 		if requestErr != nil {
 			return "failed", requestErr
 		}
@@ -949,16 +958,17 @@ func (s *Service) DetectBuildAccounts(ctx context.Context, ids []uint64) (BuildD
 			if _, updateErr := s.accounts.Update(workCtx, value); updateErr != nil {
 				return "failed", updateErr
 			}
-			_ = s.accounts.UpdateObservedModel(workCtx, value.ID, "grok-4.5-build-free", s.now())
+			_ = s.accounts.UpdateObservedModel(workCtx, value.ID, probeModel, s.now())
 			return "succeeded", nil
 		}
-		value.Enabled = false
 		switch response.StatusCode {
 		case http.StatusForbidden, http.StatusUnauthorized:
+			value.Enabled = false
 			_, _ = s.accounts.Update(workCtx, value)
 			_ = s.MarkReauthRequired(workCtx, value.ID, "Grok Build chat endpoint access denied")
 			return "invalid", nil
 		case http.StatusTooManyRequests:
+			value.Enabled = false
 			value.LastError = "Grok Build free usage exhausted"
 			_, _ = s.accounts.Update(workCtx, value)
 			return "exhausted", nil
@@ -986,6 +996,23 @@ func (s *Service) DetectBuildAccounts(ctx context.Context, ids []uint64) (BuildD
 		}
 	}
 	return result, runErr
+}
+
+func chooseBuildDetectionModel(observed string, available []string) string {
+	observed = strings.TrimSpace(observed)
+	for _, model := range available {
+		if strings.TrimSpace(model) == observed && observed != "" {
+			return observed
+		}
+	}
+	for _, preferred := range []string{"grok-4.5", "grok-4.5-build-free"} {
+		for _, model := range available {
+			if strings.TrimSpace(model) == preferred {
+				return preferred
+			}
+		}
+	}
+	return strings.TrimSpace(available[0])
 }
 
 func (s *Service) DeleteInvalidBuildAccounts(ctx context.Context) (int64, error) {
