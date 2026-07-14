@@ -135,6 +135,8 @@ func (h *Handler) Register(router *gin.RouterGroup) {
 	router.POST("/accounts/import", h.importAuth)
 	router.POST("/accounts/web/import", h.importWebAuth)
 	router.POST("/accounts/web/convert-to-build", h.convertWebToBuild)
+	router.POST("/accounts/build/detect", h.detectBuildAccounts)
+	router.DELETE("/accounts/build/invalid", h.deleteInvalidBuildAccounts)
 	router.POST("/accounts/web/refresh-quotas", h.refreshAllWebQuotas)
 	router.POST("/accounts/refresh-billing", h.refreshAllBilling)
 	router.POST("/accounts/refresh-tokens", h.refreshAllTokens)
@@ -171,6 +173,11 @@ type batchDeleteRequest struct {
 }
 
 type buildConversionRequest struct {
+	IDs []string `json:"ids"`
+	All bool     `json:"all"`
+}
+
+type buildDetectionRequest struct {
 	IDs []string `json:"ids"`
 	All bool     `json:"all"`
 }
@@ -496,6 +503,40 @@ func (h *Handler) convertWebToBuild(c *gin.Context) {
 		}
 	}
 	h.streamWebToBuildConversion(c, request.All, ids)
+}
+
+func (h *Handler) detectBuildAccounts(c *gin.Context) {
+	var request buildDetectionRequest
+	if c.ShouldBindJSON(&request) != nil || (request.All && len(request.IDs) > 0) {
+		response.Error(c, http.StatusBadRequest, "invalidRequest", "检测请求无效")
+		return
+	}
+	var ids []uint64
+	var err error
+	if request.All {
+		ids, err = h.service.ListBuildAccountIDs(c.Request.Context())
+	} else {
+		ids, err = parseIDs(request.IDs)
+	}
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
+		return
+	}
+	result, err := h.service.DetectBuildAccounts(c.Request.Context(), ids)
+	if err != nil {
+		response.Error(c, http.StatusBadGateway, "accountDetectionFailed", "检测 Build 账号失败")
+		return
+	}
+	response.Success(c, http.StatusOK, gin.H{"succeeded": result.Succeeded, "invalid": result.Invalid, "exhausted": result.Exhausted, "failed": result.Failed})
+}
+
+func (h *Handler) deleteInvalidBuildAccounts(c *gin.Context) {
+	deleted, err := h.service.DeleteInvalidBuildAccounts(c.Request.Context())
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "invalidAccountDeleteFailed", "删除异常 Build 账号失败")
+		return
+	}
+	response.Success(c, http.StatusOK, gin.H{"deleted": deleted})
 }
 
 func (h *Handler) runWebToBuildConversion(ctx context.Context, all bool, ids []uint64, progress accountapp.BatchProgressObserver, syncProgress func(completed, total int)) (accountapp.BuildConversionResult, accountsyncapp.Result, error) {

@@ -457,7 +457,7 @@ func defaultConfig() Config {
 			CooldownBase: Duration(30 * time.Second),
 			CooldownMax:  Duration(30 * time.Minute),
 			CapacityWait: Duration(500 * time.Millisecond),
-			MaxAttempts:  3,
+			MaxAttempts:  20,
 		},
 		Audit:             AuditConfig{BufferSize: 16384, BatchSize: 256, FlushInterval: Duration(250 * time.Millisecond)},
 		ClientKeyDefaults: ClientKeyDefaultsConfig{RPMLimit: clientkeydomain.DefaultRPMLimit, MaxConcurrent: clientkeydomain.DefaultMaxConcurrent},

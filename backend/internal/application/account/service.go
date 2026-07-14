@@ -2,9 +2,12 @@ package account
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -140,6 +143,13 @@ type BuildConversionResult struct {
 	Skipped         int
 	Failed          int
 	BuildAccountIDs []uint64
+}
+
+type BuildDetectionResult struct {
+	Succeeded int
+	Invalid   int
+	Exhausted int
+	Failed    int
 }
 
 type ListFilter struct {
@@ -878,7 +888,125 @@ func (s *Service) convertWebAccountToBuild(ctx context.Context, id uint64) (uint
 	if err := s.accounts.LinkWebToBuild(ctx, id, buildAccount.ID); err != nil {
 		return 0, false, false, mapRepositoryError(err)
 	}
+	if created {
+		buildAccount.Enabled = false
+		buildAccount.LastError = "等待真实请求检测"
+		if buildAccount, err = s.accounts.Update(ctx, buildAccount); err != nil {
+			return 0, false, false, mapRepositoryError(err)
+		}
+	}
 	return buildAccount.ID, created, false, nil
+}
+
+func (s *Service) ListBuildAccountIDs(ctx context.Context) ([]uint64, error) {
+	values, _, err := s.accounts.List(ctx, repository.AccountListQuery{
+		Page:   repository.PageQuery{Limit: 10000},
+		Filter: repository.AccountListFilter{Provider: string(accountdomain.ProviderBuild), Now: s.now()},
+	})
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]uint64, 0, len(values))
+	for _, value := range values {
+		ids = append(ids, value.ID)
+	}
+	return ids, nil
+}
+
+func (s *Service) DetectBuildAccounts(ctx context.Context, ids []uint64) (BuildDetectionResult, error) {
+	ids, err := normalizeIDs(ids, 10000)
+	if err != nil {
+		return BuildDetectionResult{}, err
+	}
+	adapter, ok := s.providers.Responses(accountdomain.ProviderBuild)
+	if !ok {
+		return BuildDetectionResult{}, fmt.Errorf("Grok Build Provider 未注册")
+	}
+	type outcome string
+	results, _, runErr := batch.Map(ctx, ids, batch.Options{Workers: min(s.conversionPool.Limit(), 10), Pool: s.conversionPool}, func(workCtx context.Context, id uint64) (outcome, error) {
+		value, getErr := s.accounts.Get(workCtx, id)
+		if getErr != nil {
+			return "failed", getErr
+		}
+		if value.Provider != accountdomain.ProviderBuild {
+			return "failed", ErrUnsupported
+		}
+		value, getErr = s.EnsureCredential(workCtx, value, false)
+		if getErr != nil {
+			return "failed", getErr
+		}
+		body, _ := json.Marshal(map[string]any{"model": "grok-4.5-build-free", "input": "Reply with OK only.", "max_output_tokens": 8, "stream": false})
+		response, requestErr := adapter.ForwardResponse(workCtx, provider.ResponseResourceRequest{Credential: value, Method: http.MethodPost, Path: "/responses", Body: body, Model: "grok-4.5-build-free", Operation: "responses"})
+		if requestErr != nil {
+			return "failed", requestErr
+		}
+		defer response.Body.Close()
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
+		if response.StatusCode >= 200 && response.StatusCode < 300 {
+			value.Enabled = true
+			value.AuthStatus = accountdomain.AuthStatusActive
+			value.LastError = ""
+			if _, updateErr := s.accounts.Update(workCtx, value); updateErr != nil {
+				return "failed", updateErr
+			}
+			_ = s.accounts.UpdateObservedModel(workCtx, value.ID, "grok-4.5-build-free", s.now())
+			return "succeeded", nil
+		}
+		value.Enabled = false
+		switch response.StatusCode {
+		case http.StatusForbidden, http.StatusUnauthorized:
+			_, _ = s.accounts.Update(workCtx, value)
+			_ = s.MarkReauthRequired(workCtx, value.ID, "Grok Build chat endpoint access denied")
+			return "invalid", nil
+		case http.StatusTooManyRequests:
+			value.LastError = "Grok Build free usage exhausted"
+			_, _ = s.accounts.Update(workCtx, value)
+			return "exhausted", nil
+		default:
+			value.LastError = fmt.Sprintf("检测失败: HTTP %d", response.StatusCode)
+			_, _ = s.accounts.Update(workCtx, value)
+			return "failed", nil
+		}
+	})
+	result := BuildDetectionResult{}
+	for _, execution := range results {
+		if execution.Err != nil {
+			result.Failed++
+			continue
+		}
+		switch execution.Value {
+		case "succeeded":
+			result.Succeeded++
+		case "invalid":
+			result.Invalid++
+		case "exhausted":
+			result.Exhausted++
+		default:
+			result.Failed++
+		}
+	}
+	return result, runErr
+}
+
+func (s *Service) DeleteInvalidBuildAccounts(ctx context.Context) (int64, error) {
+	values, _, err := s.accounts.List(ctx, repository.AccountListQuery{Page: repository.PageQuery{Limit: 10000}, Filter: repository.AccountListFilter{Provider: string(accountdomain.ProviderBuild), Status: string(accountdomain.AuthStatusReauthRequired), Now: s.now()}})
+	if err != nil {
+		return 0, err
+	}
+	ids := make([]uint64, 0, len(values))
+	for _, value := range values {
+		ids = append(ids, value.ID)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	for _, id := range ids {
+		if s.sticky != nil {
+			_ = s.sticky.DeleteByAccount(ctx, id)
+		}
+		s.clearRefreshState(id)
+	}
+	return s.accounts.DeleteMany(ctx, ids)
 }
 
 // ExportCredentials 导出可由当前导入接口重新读取的 Grok Build OAuth 凭据文档。

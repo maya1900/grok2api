@@ -376,6 +376,19 @@ export function deleteAccounts(ids: string[], provider: "grok_build" | "grok_web
   return apiRequest("/api/admin/v1/accounts", { method: "DELETE", body: { ids, provider } }, decodeCountResult<{ deleted: number }>("deleted"));
 }
 
+export type BuildDetectionResultDTO = { succeeded: number; invalid: number; exhausted: number; failed: number };
+
+export function detectBuildAccounts(ids?: string[]): Promise<BuildDetectionResultDTO> {
+  return apiRequest("/api/admin/v1/accounts/build/detect", {
+    method: "POST",
+    body: ids ? { ids, all: false } : { ids: [], all: true },
+  }, createObjectDecoder("build detection", { succeeded: isNumber, invalid: isNumber, exhausted: isNumber, failed: isNumber }));
+}
+
+export function deleteInvalidBuildAccounts(): Promise<{ deleted: number }> {
+  return apiRequest("/api/admin/v1/accounts/build/invalid", { method: "DELETE" }, decodeCountResult<{ deleted: number }>("deleted"));
+}
+
 export function startDeviceAuthorization(): Promise<DeviceSessionDTO> {
   return apiRequest("/api/admin/v1/accounts/device/start", { method: "POST" }, decodeDeviceSession);
 }

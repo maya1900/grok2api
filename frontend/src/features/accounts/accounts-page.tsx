@@ -35,6 +35,8 @@ import { nextTableSort, type SortOrder, type TableSort } from "@/shared/lib/tabl
 import {
   deleteAccount,
   deleteAccounts,
+  deleteInvalidBuildAccounts,
+  detectBuildAccounts,
   convertWebAccountsToBuild,
   exportAccounts,
   getAccountSummary,
@@ -337,6 +339,25 @@ export function AccountsPage() {
     onError: showError,
   });
 
+  const detectBuildMutation = useMutation({
+    mutationFn: (ids?: string[]) => detectBuildAccounts(ids),
+    onSuccess: (result) => {
+      setSelected(new Set());
+      invalidateAccountData();
+      toast.success(`检测完成：可用 ${result.succeeded}，异常 ${result.invalid}，额度耗尽 ${result.exhausted}，失败 ${result.failed}`);
+    },
+    onError: showError,
+  });
+
+  const deleteInvalidBuildMutation = useMutation({
+    mutationFn: deleteInvalidBuildAccounts,
+    onSuccess: (result) => {
+      invalidateAccountData();
+      toast.success(`已删除 ${result.deleted} 个异常 Build 账号`);
+    },
+    onError: showError,
+  });
+
   useEffect(() => {
     if (!deviceOpen || !deviceSession || deviceStatus !== "pending") {
       return;
@@ -545,6 +566,7 @@ export function AccountsPage() {
                 <Button variant="secondary" size="sm" onClick={() => batchUpdateMutation.mutate(false)}>{t("common.disable")}</Button>
                 {provider === "grok_web" ? <Button variant="secondary" size="sm" onClick={() => setConversionTargets([...selected])}>{t("accounts.convertToBuild")}</Button> : null}
                 {provider === "grok_build" ? <Button variant="secondary" size="sm" onClick={() => batchBillingMutation.mutate()}>{t("accounts.refreshBilling")}</Button> : null}
+                {provider === "grok_build" ? <Button variant="secondary" size="sm" disabled={detectBuildMutation.isPending} onClick={() => detectBuildMutation.mutate([...selected])}>{detectBuildMutation.isPending ? <Spinner /> : null}检测账号</Button> : null}
                 <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => setBatchDeleteOpen(true)}>{t("common.delete")}</Button>
               </div>
             ) : (
@@ -552,6 +574,8 @@ export function AccountsPage() {
                 {provider === "grok_web" && webSummary.total > 0 ? <Button variant="secondary" size="sm" onClick={() => setConversionTargets("all")}>{t("accountBulk.convertAllToBuild")}</Button> : null}
                 {hasAccounts ? <Button variant="secondary" size="sm" onClick={() => setSyncAllOpen(true)}>{t("accounts.syncAll")}</Button> : null}
                 {hasAccounts && provider === "grok_build" ? <Button variant="secondary" size="sm" onClick={() => setRenewAllOpen(true)}>{t("accounts.renewAll")}</Button> : null}
+                {hasAccounts && provider === "grok_build" ? <Button variant="secondary" size="sm" disabled={detectBuildMutation.isPending} onClick={() => detectBuildMutation.mutate(undefined)}>{detectBuildMutation.isPending ? <Spinner /> : null}检测全部账号</Button> : null}
+                {provider === "grok_build" && attentionAccounts > 0 ? <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" disabled={deleteInvalidBuildMutation.isPending} onClick={() => deleteInvalidBuildMutation.mutate()}>{deleteInvalidBuildMutation.isPending ? <Spinner /> : null}删除异常账号</Button> : null}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild><Button size="sm">{t("accounts.connectAccount")}</Button></DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
